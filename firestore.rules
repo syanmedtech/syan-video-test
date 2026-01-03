@@ -1,0 +1,65 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Admin only access
+    function isAdmin() {
+      return request.auth != null && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    
+    // Super admin check
+    function isSuperAdmin() {
+      return isAdmin() && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super_admin';
+    }
+
+    match /admins/{uid} {
+      allow read: if request.auth.uid == uid || isSuperAdmin();
+      allow write: if isSuperAdmin();
+    }
+
+    // Global Player Settings - Restricted for Admin writes
+    match /appConfig/player {
+      allow read: if false; // Viewers should use getPublicPlayerConfig() CF endpoint
+      allow write: if isAdmin();
+    }
+
+    match /videos/{videoId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+      
+      // Strict field level check: sourceMeta is admin-only
+      // In production, split sensitive fields into a subcollection or use field masking in logic
+    }
+
+    match /importJobs/{jobId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /videoStats/{videoId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isAdmin();
+      allow create: if true;
+      allow update: if isAdmin();
+    }
+
+    match /violations/{violationId} {
+      allow read: if isAdmin();
+      allow create: if true; 
+    }
+
+    match /accessSessions/{sessionId} {
+      allow read: if isAdmin() || (request.auth != null && request.auth.uid == resource.data.userId);
+      allow create: if true;
+      allow update: if true; 
+    }
+    
+    match /bans/{emailLower} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Syan Secure Video Library",
+  "description": "A production-ready secure video hosting and streaming platform with advanced anti-piracy measures, administrative controls, and detailed viewer analytics.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
