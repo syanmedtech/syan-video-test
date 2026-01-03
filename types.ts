@@ -1,5 +1,4 @@
 
-
 export type UserRole = 'super_admin' | 'admin';
 
 export interface Admin {
@@ -63,7 +62,6 @@ export interface GlobalPlayerSettings {
   blockForward10: boolean;
   updatedAt: number;
   updatedBy: string;
-  // Dynamic URLs for the player
   watermarkUrl?: string;
   logoUrl?: string;
 }
@@ -84,7 +82,6 @@ export interface Video {
   securitySettings: SecuritySettings;
   availabilitySettings: AvailabilitySettings;
   playerSettings: PlayerSettings;
-  // Added publicLink property to fix missing property errors in Instructions.tsx and Player.tsx
   publicLink?: {
     token: string;
     createdAt: number;
@@ -107,36 +104,7 @@ export interface PublicUser {
   banned: boolean;
   createdAt: number;
   lastActiveAt: number;
-  totalViolations?: number; // Aggregated
-}
-
-export interface UserVideoActivity {
-  videoId: string;
-  videoTitle: string;
-  totalWatchTimeSec: number;
-  sessionsCount: number;
-  lastSeenAt: number;
-  completionRate: number;
-}
-
-export interface Violation {
-  id: string;
-  userId: string;
-  emailLower: string;
-  videoId: string;
-  videoTitle: string;
-  sessionId: string;
-  violationType: ViolationType;
-  timestamp: number;
-  severity: 'low' | 'medium' | 'high';
-  resolved: boolean;
-  metadata: {
-    userAgent: string;
-    ipHash: string;
-    page: string;
-    browser?: string;
-    extra?: any;
-  };
+  totalViolations?: number;
 }
 
 export interface AccessSession {
@@ -167,4 +135,34 @@ export enum ViolationType {
   SPEED_ATTEMPT = 'speed_attempt',
   SEEK_FORWARD_ATTEMPT = 'seek_forward_attempt',
   FORWARD10_ATTEMPT = 'forward10_attempt'
+}
+
+// Added missing Violation interface to fix type errors in UserDetail.tsx
+export interface Violation {
+  id: string;
+  userId: string;
+  emailLower: string;
+  videoId: string;
+  videoTitle: string;
+  sessionId: string;
+  violationType: ViolationType;
+  timestamp: number;
+  severity: 'low' | 'medium' | 'high';
+  resolved: boolean;
+  metadata: {
+    userAgent: string;
+    ipHash?: string;
+    page: string;
+    browser?: string;
+  };
+}
+
+// Added missing UserVideoActivity interface to fix type errors in UserDetail.tsx
+export interface UserVideoActivity {
+  videoId: string;
+  videoTitle: string;
+  totalWatchTimeSec: number;
+  sessionsCount: number;
+  lastSeenAt: number;
+  completionRate: number;
 }

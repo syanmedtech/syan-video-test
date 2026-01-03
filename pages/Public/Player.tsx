@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { ViolationType, GlobalPlayerSettings, Violation, Video, AccessSession } from '../../types';
+import { ViolationType, GlobalPlayerSettings, Video, AccessSession } from '../../types';
 import { db, storage, isFirebaseConfigured } from '../../firebase';
 
 export default function PublicPlayer() {
@@ -32,13 +32,12 @@ export default function PublicPlayer() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [brightness, setBrightness] = useState(100);
 
-  // Enforcement tracking
-  const lastAllowedTimeRef = useRef(0);
-  const sessionDataRef = useRef<any>(null);
+  // Merged Settings state
+  const [activeSettings, setActiveSettings] = useState<any>(null);
 
+  const lastAllowedTimeRef = useRef(0);
   const localReg = JSON.parse(localStorage.getItem(`session_${shareId}`) || '{}');
 
-  // Prevent page scrolling during player view
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -51,7 +50,9 @@ export default function PublicPlayer() {
   useEffect(() => {
     const init = async () => {
       if (!isFirebaseConfigured()) {
-        setError("Firebase not configured.");
+        const savedGlobal = localStorage.getItem('global_player_settings');
+        if (savedGlobal) setGlobalSettings(JSON.parse(savedGlobal));
+        setError("Demo mode active - fetching simulated data.");
         setIsLoading(false);
         return;
       }
@@ -62,11 +63,13 @@ export default function PublicPlayer() {
       }
 
       try {
-        // 1. Fetch Global Settings
-        const globalRef = doc(db, 'appConfig', 'player');
+        // 1. Fetch Global Settings from active path
+        const globalRef = doc(db, 'globalPlayerSettings', 'active');
         const globalSnap = await getDoc(globalRef);
+        let gSettings: GlobalPlayerSettings | null = null;
         if (globalSnap.exists()) {
-          setGlobalSettings(globalSnap.data() as GlobalPlayerSettings);
+          gSettings = globalSnap.data() as GlobalPlayerSettings;
+          setGlobalSettings(gSettings);
         }
 
         // 2. Fetch Video by token
@@ -88,7 +91,21 @@ export default function PublicPlayer() {
           return;
         }
 
-        // 3. Setup/Resume Session
+        // 3. Merge Settings (Video Overrides > Global)
+        const merged = {
+          ...gSettings,
+          // Security overrides
+          blockRecording: vidData.securitySettings?.blockRecording,
+          blockScreenshot: vidData.securitySettings?.blockScreenshot,
+          blockRightClick: vidData.securitySettings?.blockRightClick,
+          blockDevTools: vidData.securitySettings?.blockDevTools,
+          focusMode: vidData.securitySettings?.focusMode,
+          // Player overrides if present
+          ...(vidData.playerSettings || {})
+        };
+        setActiveSettings(merged);
+
+        // 4. Setup/Resume Session
         const sessionId = `sess_${localReg.userId}_${vidDoc.id}`;
         const sessionRef = doc(db, 'accessSessions', sessionId);
         const sessionSnap = await getDoc(sessionRef);
@@ -101,7 +118,7 @@ export default function PublicPlayer() {
             userId: localReg.userId,
             emailLower: localReg.email.toLowerCase(),
             createdAt: Date.now(),
-            expiresAt: Date.now() + 86400000, // Default 24h
+            expiresAt: Date.now() + 86400000,
             violationsCount: 0,
             status: 'active',
             deviceInfo: navigator.userAgent,
@@ -119,9 +136,8 @@ export default function PublicPlayer() {
         }
         setSessionDoc(currentSess);
         setViolations(currentSess.violationsCount || 0);
-        sessionDataRef.current = currentSess;
 
-        // 4. Get Storage URL
+        // 5. Get Storage URL
         if (vidData.storagePath) {
           const sRef = ref(storage, vidData.storagePath);
           const url = await getDownloadURL(sRef);
@@ -143,14 +159,11 @@ export default function PublicPlayer() {
   const logViolation = useCallback(async (type: ViolationType) => {
     if (!videoData || !sessionDoc || isRevoked) return;
     
-    console.warn(`Violation: ${type}`);
     const nextViolations = violations + 1;
     const limit = videoData.securitySettings?.violationLimit || 4;
-    
     setViolations(nextViolations);
     
     try {
-      // 1. Log individual violation record
       const violRef = doc(collection(db, 'violations'));
       await setDoc(violRef, {
         id: violRef.id,
@@ -170,7 +183,6 @@ export default function PublicPlayer() {
         }
       });
 
-      // 2. Update Session
       const sessionRef = doc(db, 'accessSessions', sessionDoc.id);
       const updates: any = { 
         violationsCount: nextViolations, 
@@ -196,7 +208,6 @@ export default function PublicPlayer() {
   useEffect(() => {
     if (!videoData || isRevoked || isLoading) return;
 
-    // 1. Fullscreen monitoring
     const onFsChange = () => {
       const isFs = !!document.fullscreenElement;
       setIsFullscreen(isFs);
@@ -206,38 +217,33 @@ export default function PublicPlayer() {
       }
     };
 
-    // 2. Focus/Visibility monitoring
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && videoData.securitySettings?.focusMode) {
+      if (document.visibilityState === 'hidden' && (videoData.securitySettings?.focusMode || globalSettings?.focusMode)) {
         logViolation(ViolationType.FOCUS_LOST);
         videoRef.current?.pause();
       }
     };
 
-    // 3. Right Click
     const onContextMenu = (e: MouseEvent) => {
-      if (videoData.securitySettings?.blockRightClick) {
+      if (videoData.securitySettings?.blockRightClick || globalSettings?.blockRightClick) {
         e.preventDefault();
         logViolation(ViolationType.RIGHT_CLICK);
       }
     };
 
-    // 4. Keyboard Shortcuts (DevTools, Screen Recording shortcuts)
     const onKeyDown = (e: KeyboardEvent) => {
-      // F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
       if (
         e.key === 'F12' || 
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
         (e.ctrlKey && e.key === 'u')
       ) {
-        if (videoData.securitySettings?.blockDevTools) {
+        if (videoData.securitySettings?.blockDevTools || globalSettings?.blockDevTools) {
           e.preventDefault();
           logViolation(ViolationType.DEVTOOLS_DETECTED);
         }
       }
-      // PrintScreen
       if (e.key === 'PrintScreen') {
-        if (videoData.securitySettings?.blockScreenshot) {
+        if (videoData.securitySettings?.blockScreenshot || globalSettings?.blockScreenshot) {
           logViolation(ViolationType.SCREENSHOT_ATTEMPT);
         }
       }
@@ -254,27 +260,28 @@ export default function PublicPlayer() {
       document.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [videoData, isRevoked, isLoading, logViolation]);
+  }, [videoData, globalSettings, isRevoked, isLoading, logViolation]);
 
   // Security Blinking Logic
   useEffect(() => {
-    if (!globalSettings?.securityWatermarkEnabled || isRevoked) return;
+    const blinkEnabled = activeSettings?.securityWatermarkEnabled;
+    if (!blinkEnabled || isRevoked) return;
+    
     const interval = setInterval(() => {
       setShowSecurityWatermark(true);
       setWatermarkPos({
         top: Math.random() * 80 + 10 + '%',
         left: Math.random() * 70 + 10 + '%'
       });
-      setTimeout(() => setShowSecurityWatermark(false), globalSettings.blinkDurationMs);
-    }, globalSettings.blinkIntervalSeconds * 1000);
+      setTimeout(() => setShowSecurityWatermark(false), activeSettings.blinkDurationMs || 2000);
+    }, (activeSettings.blinkIntervalSeconds || 5) * 1000);
     return () => clearInterval(interval);
-  }, [globalSettings, isRevoked]);
+  }, [activeSettings, isRevoked]);
 
-  // Video Control Handlers
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       const time = videoRef.current.currentTime;
-      if (globalSettings?.blockForward10) {
+      if (activeSettings?.blockForward10) {
         if (time - lastAllowedTimeRef.current > 2.0) {
           videoRef.current.currentTime = lastAllowedTimeRef.current;
           logViolation(ViolationType.FORWARD10_ATTEMPT);
@@ -287,7 +294,7 @@ export default function PublicPlayer() {
   };
 
   const handlePauseEvent = () => {
-    if (globalSettings?.blockPause && videoRef.current && !isRevoked) {
+    if (activeSettings?.blockPause && videoRef.current && !isRevoked) {
       videoRef.current.play().catch(() => {});
       setIsPaused(false);
       logViolation(ViolationType.PAUSE_ATTEMPT);
@@ -304,7 +311,7 @@ export default function PublicPlayer() {
       }
       videoRef.current.play();
     } else {
-      if (globalSettings?.blockPause) {
+      if (activeSettings?.blockPause) {
         logViolation(ViolationType.PAUSE_ATTEMPT);
         return;
       }
@@ -347,21 +354,6 @@ export default function PublicPlayer() {
     </div>
   );
 
-  if (error) return (
-    <div className="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
-      <div className="space-y-6">
-        <h1 className="text-2xl font-bold text-red-400">Error Loading Player</h1>
-        <p className="text-slate-400 max-w-sm">{error}</p>
-        <button 
-          onClick={() => navigate(`/watch/${shareId}`)}
-          className="px-6 py-2 bg-slate-800 rounded-xl font-bold"
-        >
-          Go Back
-        </button>
-      </div>
-    </div>
-  );
-
   return (
     <div 
       ref={playerContainerRef}
@@ -369,7 +361,6 @@ export default function PublicPlayer() {
       style={{ filter: `brightness(${brightness}%)` }}
       onContextMenu={(e) => { e.preventDefault(); logViolation(ViolationType.RIGHT_CLICK); }}
     >
-      {/* Dynamic Header Overlay - flex: none ensures it doesn't shrink and pushes content down correctly */}
       <header className="flex-none p-4 md:p-10 flex justify-between items-start z-[100] bg-gradient-to-b from-black/90 to-transparent">
         <div className="flex items-center gap-4 md:gap-6">
           <button 
@@ -393,7 +384,6 @@ export default function PublicPlayer() {
         </div>
       </header>
 
-      {/* Main Video Viewport - flex-1 with min-h-0 makes it fill the remaining space correctly */}
       <div className="flex-1 min-h-0 relative flex items-center justify-center group bg-black">
         {videoUrl && (
           <video
@@ -408,13 +398,23 @@ export default function PublicPlayer() {
           />
         )}
 
+        {/* Global/Video Logo Overlay */}
+        {(activeSettings?.logoAssetPath) && (
+          <div 
+            className="absolute top-10 right-10 pointer-events-none z-30 select-none transition-opacity"
+            style={{ opacity: activeSettings.logoOpacity }}
+          >
+             <img src={activeSettings.logoAssetPath} className="w-16 md:w-24 h-auto" />
+          </div>
+        )}
+
         {/* Branding Overlays */}
-        {globalSettings?.watermarkAssetPath && (
+        {(activeSettings?.watermarkAssetPath) && (
           <div 
             className="absolute inset-0 pointer-events-none flex items-center justify-center z-30 select-none no-select overflow-hidden"
-            style={{ opacity: globalSettings.watermarkOpacity }}
+            style={{ opacity: activeSettings.watermarkOpacity }}
           >
-             <div className="w-3/4 md:w-1/2 opacity-30 pointer-events-none text-white font-bold text-4xl md:text-6xl text-center rotate-45 border-4 border-white p-8 md:p-12 select-none">SYAN SECURE</div>
+             <img src={activeSettings.watermarkAssetPath} className="w-1/2 md:w-1/3 h-auto rotate-12" />
           </div>
         )}
 
@@ -433,9 +433,8 @@ export default function PublicPlayer() {
           </div>
         )}
 
-        {/* Control Bar Overlay - remains absolute but stays within the player container */}
         <div className="absolute bottom-0 left-0 right-0 p-4 md:p-10 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500 z-[100]">
-          <div className={`relative w-full h-1 md:h-1.5 bg-white/10 rounded-full mb-4 md:mb-8 overflow-hidden ${globalSettings?.blockForward10 ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+          <div className={`relative w-full h-1 md:h-1.5 bg-white/10 rounded-full mb-4 md:mb-8 overflow-hidden ${activeSettings?.blockForward10 ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
             <div 
               className="absolute top-0 left-0 h-full bg-sky-500 shadow-[0_0_20px_rgba(14,165,233,0.8)]"
               style={{ width: `${(currentTime / duration) * 100 || 0}%` }}
@@ -460,7 +459,7 @@ export default function PublicPlayer() {
             </div>
 
             <div className="flex items-center gap-4 md:gap-10">
-              {!globalSettings?.blockSpeed && (
+              {!activeSettings?.blockSpeed && (
                 <div className="hidden sm:flex items-center gap-4">
                   <span className="text-white/20 text-[8px] md:text-[10px] font-bold uppercase tracking-widest">Speed</span>
                   <div className="flex gap-1">

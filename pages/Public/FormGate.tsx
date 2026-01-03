@@ -1,12 +1,18 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { PREPARING_FOR_OPTIONS, STATUS_OPTIONS, ICONS } from '../../constants';
+import { db, isFirebaseConfigured } from '../../firebase';
+import { Video } from '../../types';
 
 export default function PublicFormGate() {
   const { shareId } = useParams();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [videoData, setVideoData] = useState<Video | null>(null);
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -19,21 +25,118 @@ export default function PublicFormGate() {
     classEnrolled: ''
   });
 
+  useEffect(() => {
+    const fetchVideo = async () => {
+      if (!isFirebaseConfigured()) return;
+      try {
+        const q = query(collection(db, 'videos'), where('publicLink.token', '==', shareId));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          setVideoData({ id: snap.docs[0].id, ...snap.docs[0].data() } as Video);
+        }
+      } catch (e) {
+        console.error("Error fetching video metadata:", e);
+      }
+    };
+    fetchVideo();
+  }, [shareId]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setError(null);
 
-    // Mock session registration
-    setTimeout(() => {
-      localStorage.setItem(`session_${shareId}`, JSON.stringify({ 
-        userId: 'u_' + Math.random().toString(36).substr(2, 9),
-        videoId: 'v1',
-        createdAt: Date.now(),
-        ...formData
-      }));
+    if (!isFirebaseConfigured()) {
+      // Demo fallback
+      setTimeout(() => {
+        localStorage.setItem(`session_${shareId}`, JSON.stringify({ 
+          userId: 'demo_user',
+          videoId: videoData?.id || 'v1',
+          createdAt: Date.now(),
+          ...formData
+        }));
+        setIsLoading(false);
+        navigate(`/watch/${shareId}/instructions`);
+      }, 1000);
+      return;
+    }
+
+    try {
+      const emailLower = formData.email.toLowerCase().trim();
+      const cleanCnic = formData.cnic.replace(/[^0-9X-]/gi, '');
+      // Deterministic Viewer ID: simple concatenation for uniqueness
+      const viewerId = `viewer_${btoa(emailLower + "|" + cleanCnic).replace(/=/g, '')}`;
+      
+      const viewerRef = doc(db, 'viewers', viewerId);
+      const viewerSnap = await getDoc(viewerRef);
+
+      if (viewerSnap.exists() && viewerSnap.data().isBanned) {
+        setError("Access Denied: Your account has been banned from this library.");
+        setIsLoading(false);
+        return;
+      }
+
+      // 1. Create/Update Viewer Record
+      const viewerPayload = {
+        id: viewerId,
+        name: formData.name,
+        email: emailLower,
+        emailLower: emailLower,
+        whatsapp: formData.whatsapp,
+        cnic: cleanCnic,
+        university: formData.university,
+        preparingFor: formData.preparingFor,
+        preparingForOtherText: formData.preparingForOtherText,
+        status: formData.status, // mapped to statusRole logic
+        classEnrolled: formData.classEnrolled,
+        banned: false,
+        isBanned: false,
+        createdAt: viewerSnap.exists() ? viewerSnap.data().createdAt : serverTimestamp(),
+        lastSeenAt: serverTimestamp(),
+        lastActiveAt: Date.now()
+      };
+
+      await setDoc(viewerRef, viewerPayload, { merge: true });
+
+      // 2. Create Watch Session
+      if (videoData) {
+        const sessionId = `sess_${viewerId}_${videoData.id}_${Date.now()}`;
+        const sessionRef = doc(db, 'accessSessions', sessionId);
+        
+        await setDoc(sessionRef, {
+          id: sessionId,
+          videoId: videoData.id,
+          videoTitle: videoData.title,
+          userId: viewerId,
+          emailLower: emailLower,
+          startedAt: serverTimestamp(),
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 86400000, // 24h default
+          violationsCount: 0,
+          status: 'active',
+          deviceInfo: navigator.userAgent,
+          userAgent: navigator.userAgent,
+          lastSeenAt: Date.now()
+        });
+
+        // Store local session info for player routing
+        localStorage.setItem(`session_${shareId}`, JSON.stringify({ 
+          userId: viewerId,
+          videoId: videoData.id,
+          sessionId: sessionId,
+          email: emailLower,
+          name: formData.name,
+          cnic: cleanCnic
+        }));
+      }
+
       setIsLoading(false);
       navigate(`/watch/${shareId}/instructions`);
-    }, 1500);
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      setError("Failed to register session. Please try again.");
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -44,11 +147,20 @@ export default function PublicFormGate() {
             <ICONS.Shield className="w-8 h-8" />
           </div>
           <h1 className="text-3xl font-bold text-slate-900">Syan Secure Access</h1>
-          <p className="text-slate-500 mt-2">Please complete the registration to watch the video content.</p>
+          <p className="text-slate-500 mt-2">
+            {videoData ? `Viewing: ${videoData.title}` : 'Please complete the registration to watch the video content.'}
+          </p>
         </div>
 
         <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
           <div className="p-8">
+            {error && (
+              <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-bold flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                {error}
+              </div>
+            )}
+            
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="grid md:grid-cols-2 gap-6">
                 <div className="space-y-2">
@@ -114,7 +226,7 @@ export default function PublicFormGate() {
                     onChange={e => setFormData({...formData, preparingFor: e.target.value})}
                     className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-sky-500 outline-none"
                   >
-                    {PREPARING_FOR_OPTIONS.map(opt => <option key={opt}>{opt}</option>)}
+                    {PREPARING_FOR_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                   </select>
                 </div>
                 {formData.preparingFor === 'OTHER' && (
@@ -136,7 +248,7 @@ export default function PublicFormGate() {
                     onChange={e => setFormData({...formData, status: e.target.value})}
                     className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-sky-500 outline-none"
                   >
-                    {STATUS_OPTIONS.map(opt => <option key={opt}>{opt}</option>)}
+                    {STATUS_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
