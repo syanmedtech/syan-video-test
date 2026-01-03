@@ -1,7 +1,10 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ViolationType, GlobalPlayerSettings, Violation } from '../../types';
+import { ref, getDownloadURL } from 'firebase/storage';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { ViolationType, GlobalPlayerSettings, Violation, Video, AccessSession } from '../../types';
+import { db, storage, isFirebaseConfigured } from '../../firebase';
 
 export default function PublicPlayer() {
   const { shareId } = useParams();
@@ -9,123 +12,260 @@ export default function PublicPlayer() {
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   
-  // State
+  // States
+  const [videoData, setVideoData] = useState<Video | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<GlobalPlayerSettings | null>(null);
+  const [sessionDoc, setSessionDoc] = useState<AccessSession | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isRevoked, setIsRevoked] = useState(false);
+
+  // UI States
   const [violations, setViolations] = useState(0);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(true);
   const [isPaused, setIsPaused] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [watermarkPos, setWatermarkPos] = useState({ top: '10%', left: '10%' });
   const [showSecurityWatermark, setShowSecurityWatermark] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [volume, setVolume] = useState(1);
   const [brightness, setBrightness] = useState(100);
 
   // Enforcement tracking
   const lastAllowedTimeRef = useRef(0);
-  const [globalSettings, setGlobalSettings] = useState<GlobalPlayerSettings | null>(null);
+  const sessionDataRef = useRef<any>(null);
 
-  // Session and User data
-  const session = JSON.parse(localStorage.getItem(`session_${shareId}`) || '{}');
-  const userData = session; 
-  const MAX_VIOLATIONS = 4;
+  const localReg = JSON.parse(localStorage.getItem(`session_${shareId}`) || '{}');
 
-  // Simulate Cloud Function: getPublicPlayerConfig()
-  const fetchGlobalPlayerConfig = useCallback(async () => {
-    const saved = localStorage.getItem('global_player_settings');
-    if (saved) {
-      const config = JSON.parse(saved);
-      // Simulate signed URLs for assets
-      return {
-        ...config,
-        watermarkUrl: config.watermarkAssetPath ? 'https://via.placeholder.com/600x600?text=Watermark' : null,
-        logoUrl: config.logoAssetPath ? 'https://via.placeholder.com/100x100?text=Logo' : null,
-      } as GlobalPlayerSettings;
-    }
-    return null;
-  }, []);
-
+  // Load Data
   useEffect(() => {
-    const loadConfig = async () => {
-      const config = await fetchGlobalPlayerConfig();
-      if (config) {
-        setGlobalSettings(config);
+    const init = async () => {
+      if (!isFirebaseConfigured()) {
+        setError("Firebase not configured.");
+        setIsLoading(false);
+        return;
+      }
+
+      if (!localReg.email) {
+        navigate(`/watch/${shareId}`);
+        return;
+      }
+
+      try {
+        // 1. Fetch Global Settings
+        const globalRef = doc(db, 'appConfig', 'player');
+        const globalSnap = await getDoc(globalRef);
+        if (globalSnap.exists()) {
+          setGlobalSettings(globalSnap.data() as GlobalPlayerSettings);
+        }
+
+        // 2. Fetch Video by token
+        const q = query(collection(db, 'videos'), where('publicLink.token', '==', shareId));
+        const videoSnap = await getDocs(q);
+        if (videoSnap.empty) {
+          setError("Video not found or link expired.");
+          setIsLoading(false);
+          return;
+        }
+        
+        const vidDoc = videoSnap.docs[0];
+        const vidData = vidDoc.data() as Video;
+        setVideoData({ ...vidData, id: vidDoc.id });
+
+        if (vidData.publicLink?.revoked) {
+          setIsRevoked(true);
+          setIsLoading(false);
+          return;
+        }
+
+        // 3. Setup/Resume Session
+        const sessionId = `sess_${localReg.userId}_${vidDoc.id}`;
+        const sessionRef = doc(db, 'accessSessions', sessionId);
+        const sessionSnap = await getDoc(sessionRef);
+        
+        let currentSess: any;
+        if (!sessionSnap.exists()) {
+          currentSess = {
+            id: sessionId,
+            videoId: vidDoc.id,
+            userId: localReg.userId,
+            emailLower: localReg.email.toLowerCase(),
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 86400000, // Default 24h
+            violationsCount: 0,
+            status: 'active',
+            deviceInfo: navigator.userAgent,
+            userAgent: navigator.userAgent,
+            lastSeenAt: Date.now()
+          };
+          await setDoc(sessionRef, currentSess);
+        } else {
+          currentSess = sessionSnap.data();
+          if (currentSess.status === 'revoked') {
+            setIsRevoked(true);
+            setIsLoading(false);
+            return;
+          }
+        }
+        setSessionDoc(currentSess);
+        setViolations(currentSess.violationsCount || 0);
+        sessionDataRef.current = currentSess;
+
+        // 4. Get Storage URL
+        if (vidData.storagePath) {
+          const sRef = ref(storage, vidData.storagePath);
+          const url = await getDownloadURL(sRef);
+          setVideoUrl(url);
+        } else {
+          setError("Video file path missing.");
+        }
+
+      } catch (err: any) {
+        setError(err.message || "Initialization failed.");
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    loadConfig();
-    const refreshTimer = setInterval(loadConfig, 60000); // Cache refresh every 60s
-    
-    return () => clearInterval(refreshTimer);
-  }, [fetchGlobalPlayerConfig]);
+    init();
+  }, [shareId]);
 
   const logViolation = useCallback(async (type: ViolationType) => {
-    console.warn(`Violation detected: ${type}`);
+    if (!videoData || !sessionDoc || isRevoked) return;
     
-    const violation: Violation = {
-      id: 'v_' + Math.random().toString(36).substr(2, 9),
-      emailLower: session.emailLower || 'unknown',
-      userId: session.userId || 'anonymous',
-      sessionId: session.id || 'local',
-      videoId: session.videoId || 'unknown',
-      videoTitle: 'SECURE CONTENT FEED', 
-      violationType: type,
-      timestamp: Date.now(),
-      severity: (type === ViolationType.DEVTOOLS_DETECTED || type === ViolationType.SCREENSHOT_ATTEMPT) ? 'high' : 'medium',
-      resolved: false,
-      metadata: {
-        userAgent: navigator.userAgent,
-        ipHash: 'mock_ip_hash',
-        page: window.location.pathname,
-        extra: { shareId }
+    console.warn(`Violation: ${type}`);
+    const nextViolations = violations + 1;
+    const limit = videoData.securitySettings?.violationLimit || 4;
+    
+    setViolations(nextViolations);
+    
+    try {
+      // 1. Log individual violation record
+      const violRef = doc(collection(db, 'violations'));
+      await setDoc(violRef, {
+        id: violRef.id,
+        userId: sessionDoc.userId,
+        emailLower: sessionDoc.emailLower,
+        videoId: videoData.id,
+        videoTitle: videoData.title,
+        sessionId: sessionDoc.id,
+        violationType: type,
+        timestamp: Date.now(),
+        severity: 'medium',
+        resolved: false,
+        metadata: {
+          userAgent: navigator.userAgent,
+          page: window.location.pathname,
+          browser: navigator.vendor
+        }
+      });
+
+      // 2. Update Session
+      const sessionRef = doc(db, 'accessSessions', sessionDoc.id);
+      const updates: any = { 
+        violationsCount: nextViolations, 
+        lastSeenAt: Date.now() 
+      };
+
+      if (nextViolations >= limit) {
+        updates.status = 'revoked';
+        setIsRevoked(true);
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+        videoRef.current?.pause();
+      }
+
+      await updateDoc(sessionRef, updates);
+    } catch (err) {
+      console.error("Failed to log violation:", err);
+    }
+  }, [videoData, sessionDoc, violations, isRevoked]);
+
+  // Enforcement Listeners
+  useEffect(() => {
+    if (!videoData || isRevoked || isLoading) return;
+
+    // 1. Fullscreen monitoring
+    const onFsChange = () => {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (!isFs && !isRevoked) {
+        logViolation(ViolationType.EXIT_FULLSCREEN);
+        videoRef.current?.pause();
       }
     };
 
-    const allViolations = JSON.parse(localStorage.getItem('violations_history') || '[]');
-    allViolations.push(violation);
-    localStorage.setItem('violations_history', JSON.stringify(allViolations));
-
-    setViolations(v => {
-      const next = v + 1;
-      const updatedSession = { ...session, violationsCount: next };
-      localStorage.setItem(`session_${shareId}`, JSON.stringify(updatedSession));
-
-      if (next >= MAX_VIOLATIONS) {
-        alert("Access revoked due to security policy violations.");
-        navigate(`/watch/${shareId}`);
+    // 2. Focus/Visibility monitoring
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && videoData.securitySettings?.focusMode) {
+        logViolation(ViolationType.FOCUS_LOST);
+        videoRef.current?.pause();
       }
-      return next;
-    });
-  }, [navigate, shareId, session]);
+    };
 
-  // Enforcement: Block Speed
+    // 3. Right Click
+    const onContextMenu = (e: MouseEvent) => {
+      if (videoData.securitySettings?.blockRightClick) {
+        e.preventDefault();
+        logViolation(ViolationType.RIGHT_CLICK);
+      }
+    };
+
+    // 4. Keyboard Shortcuts (DevTools, Screen Recording shortcuts)
+    const onKeyDown = (e: KeyboardEvent) => {
+      // F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
+      if (
+        e.key === 'F12' || 
+        (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
+        (e.ctrlKey && e.key === 'u')
+      ) {
+        if (videoData.securitySettings?.blockDevTools) {
+          e.preventDefault();
+          logViolation(ViolationType.DEVTOOLS_DETECTED);
+        }
+      }
+      // PrintScreen
+      if (e.key === 'PrintScreen') {
+        if (videoData.securitySettings?.blockScreenshot) {
+          logViolation(ViolationType.SCREENSHOT_ATTEMPT);
+        }
+      }
+    };
+
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    document.addEventListener('contextmenu', onContextMenu);
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('contextmenu', onContextMenu);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [videoData, isRevoked, isLoading, logViolation]);
+
+  // Security Blinking Logic
   useEffect(() => {
-    if (globalSettings?.blockSpeed && videoRef.current) {
-      if (videoRef.current.playbackRate !== 1.0) {
-        videoRef.current.playbackRate = 1.0;
-        setPlaybackSpeed(1.0);
-        logViolation(ViolationType.SPEED_ATTEMPT);
-      }
-    }
-  }, [globalSettings, playbackSpeed, logViolation]);
+    if (!globalSettings?.securityWatermarkEnabled || isRevoked) return;
+    const interval = setInterval(() => {
+      setShowSecurityWatermark(true);
+      setWatermarkPos({
+        top: Math.random() * 80 + 10 + '%',
+        left: Math.random() * 70 + 10 + '%'
+      });
+      setTimeout(() => setShowSecurityWatermark(false), globalSettings.blinkDurationMs);
+    }, globalSettings.blinkIntervalSeconds * 1000);
+    return () => clearInterval(interval);
+  }, [globalSettings, isRevoked]);
 
-  // Enforcement: Block Pause (Immediate Resume)
-  const handlePauseEvent = () => {
-    if (globalSettings?.blockPause && videoRef.current) {
-      videoRef.current.play().catch(console.error);
-      setIsPaused(false);
-      logViolation(ViolationType.PAUSE_ATTEMPT);
-    } else {
-      setIsPaused(true);
-    }
-  };
-
-  // Enforcement: Block Forward 10
+  // Video Control Handlers
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       const time = videoRef.current.currentTime;
       if (globalSettings?.blockForward10) {
-        // If jump detected beyond natural playback delta
         if (time - lastAllowedTimeRef.current > 2.0) {
           videoRef.current.currentTime = lastAllowedTimeRef.current;
           logViolation(ViolationType.FORWARD10_ATTEMPT);
@@ -137,59 +277,29 @@ export default function PublicPlayer() {
     }
   };
 
-  // Fullscreen requirement
-  useEffect(() => {
-    const handleFsChange = () => {
-      const isFs = !!document.fullscreenElement;
-      setIsFullscreen(isFs);
-      if (!isFs) {
-        logViolation(ViolationType.EXIT_FULLSCREEN);
-        videoRef.current?.pause();
-      }
-    };
-    document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
-  }, [logViolation]);
-
-  // Anti-Screenshot
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'PrintScreen' || (e.ctrlKey && e.shiftKey && e.key === 'S')) {
-        logViolation(ViolationType.SCREENSHOT_ATTEMPT);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [logViolation]);
-
-  // Security Blinking Logic
-  useEffect(() => {
-    if (!globalSettings?.securityWatermarkEnabled) return;
-    const interval = setInterval(() => {
-      setShowSecurityWatermark(true);
-      setWatermarkPos({
-        top: Math.random() * 80 + 10 + '%',
-        left: Math.random() * 70 + 10 + '%'
-      });
-      setTimeout(() => setShowSecurityWatermark(false), globalSettings.blinkDurationMs);
-    }, globalSettings.blinkIntervalSeconds * 1000);
-    return () => clearInterval(interval);
-  }, [globalSettings]);
+  const handlePauseEvent = () => {
+    if (globalSettings?.blockPause && videoRef.current && !isRevoked) {
+      videoRef.current.play().catch(() => {});
+      setIsPaused(false);
+      logViolation(ViolationType.PAUSE_ATTEMPT);
+    } else {
+      setIsPaused(true);
+    }
+  };
 
   const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPaused) {
-        if (!document.fullscreenElement) {
-          playerContainerRef.current?.requestFullscreen();
-        }
-        videoRef.current.play();
-      } else {
-        if (globalSettings?.blockPause) {
-          logViolation(ViolationType.PAUSE_ATTEMPT);
-          return;
-        }
-        videoRef.current.pause();
+    if (isRevoked || !videoRef.current) return;
+    if (isPaused) {
+      if (!document.fullscreenElement) {
+        playerContainerRef.current?.requestFullscreen();
       }
+      videoRef.current.play();
+    } else {
+      if (globalSettings?.blockPause) {
+        logViolation(ViolationType.PAUSE_ATTEMPT);
+        return;
+      }
+      videoRef.current.pause();
     }
   };
 
@@ -199,7 +309,49 @@ export default function PublicPlayer() {
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  if (!globalSettings) return null;
+  if (isLoading) return (
+    <div className="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center text-white">
+      <div className="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mb-4" />
+      <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Loading Secure Stream...</p>
+    </div>
+  );
+
+  if (isRevoked) return (
+    <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center text-white p-6 text-center">
+      <div className="bg-red-500/10 border border-red-500/20 p-12 rounded-[3rem] max-w-lg space-y-6">
+        <div className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center mx-auto shadow-2xl shadow-red-500/20">
+          <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <h1 className="text-3xl font-bold">Access Revoked</h1>
+        <p className="text-slate-400 leading-relaxed">
+          Your access to this video has been terminated due to security policy violations or link expiration. 
+          <br /><br />
+          Violations Count: <span className="text-red-500 font-bold">{violations}</span>
+        </p>
+        <button 
+          onClick={() => navigate(`/watch/${shareId}`)}
+          className="px-8 py-3 bg-white text-slate-900 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
+        >
+          Return to Dashboard
+        </button>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold text-red-400">Error Loading Player</h1>
+        <p className="text-slate-400 max-w-sm">{error}</p>
+        <button 
+          onClick={() => navigate(`/watch/${shareId}`)}
+          className="px-6 py-2 bg-slate-800 rounded-xl font-bold"
+        >
+          Go Back
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div 
@@ -208,64 +360,59 @@ export default function PublicPlayer() {
       style={{ filter: `brightness(${brightness}%)` }}
       onContextMenu={(e) => { e.preventDefault(); logViolation(ViolationType.RIGHT_CLICK); }}
     >
-      {/* Header Info Overlay */}
+      {/* Dynamic Header Overlay */}
       <div className="absolute top-0 left-0 right-0 p-10 flex justify-between items-start z-[100] bg-gradient-to-b from-black/90 to-transparent">
         <div className="flex items-center gap-6">
           <button 
-            onClick={() => navigate(`/watch/${shareId}/instructions`)}
-            className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-all border border-white/5"
+            onClick={() => {
+              if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+              navigate(`/watch/${shareId}/instructions`);
+            }}
+            className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-all border border-white/5 text-white"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
           </button>
           <div>
-            <h1 className="text-white font-bold text-lg tracking-tight">SECURE CONTENT STREAM</h1>
-            <p className="text-white/40 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Syan Encryption Active</p>
+            <h1 className="text-white font-bold text-lg tracking-tight truncate max-w-md">{videoData?.title}</h1>
+            <p className="text-white/40 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Syan Secured Stream</p>
           </div>
         </div>
         <div className={`px-5 py-2 rounded-2xl text-[10px] font-bold uppercase tracking-widest border transition-all ${
           violations > 0 ? 'bg-red-500/20 border-red-500/40 text-red-500 animate-pulse' : 'bg-green-500/10 border-green-500/20 text-green-400'
         }`}>
-          Compliance Status: {violations} / {MAX_VIOLATIONS}
+          Compliance: {violations} / {videoData?.securitySettings?.violationLimit || 4}
         </div>
       </div>
 
       {/* Main Video Viewport */}
       <div className="flex-1 relative flex items-center justify-center group">
-        <video
-          ref={videoRef}
-          onTimeUpdate={handleTimeUpdate}
-          onPause={handlePauseEvent}
-          onPlay={() => setIsPaused(false)}
-          onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
-          className="w-full h-full object-contain"
-          playsInline
-          src="https://www.w3schools.com/html/mov_bbb.mp4" 
-        />
+        {videoUrl && (
+          <video
+            ref={videoRef}
+            onTimeUpdate={handleTimeUpdate}
+            onPause={handlePauseEvent}
+            onPlay={() => setIsPaused(false)}
+            onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+            className="w-full h-full object-contain"
+            playsInline
+            src={videoUrl} 
+          />
+        )}
 
-        {/* Universal Watermark Overlay */}
-        {globalSettings.watermarkUrl && (
+        {/* Branding Overlays */}
+        {globalSettings?.watermarkAssetPath && (
           <div 
             className="absolute inset-0 pointer-events-none flex items-center justify-center z-30 select-none no-select"
             style={{ opacity: globalSettings.watermarkOpacity }}
           >
-             <img src={globalSettings.watermarkUrl} className="w-1/2 object-contain grayscale" alt="" />
+             <div className="w-1/2 opacity-30 pointer-events-none text-white font-bold text-6xl text-center rotate-45 border-4 border-white p-12 select-none">SYAN SECURE</div>
           </div>
         )}
 
-        {/* Global Logo Overlay */}
-        {globalSettings.logoUrl && (
-          <div 
-            className="absolute top-28 right-12 z-40 pointer-events-none select-none no-select"
-            style={{ opacity: globalSettings.logoOpacity }}
-          >
-             <img src={globalSettings.logoUrl} className="w-24 object-contain" alt="" />
-          </div>
-        )}
-
-        {/* Security Blinking Watermark (Viewer Personal Details) */}
+        {/* Security Personalization Blinking Watermark */}
         {showSecurityWatermark && (
           <div 
-            className="absolute z-50 text-white/50 pointer-events-none transition-all duration-300 font-bold text-xs tracking-[0.2em] backdrop-blur-[2px] px-4 py-2 bg-black/20 rounded-xl border border-white/5"
+            className="absolute z-50 text-white/40 pointer-events-none transition-all duration-300 font-bold text-xs tracking-[0.2em] backdrop-blur-[2px] px-4 py-2 bg-black/40 rounded-xl border border-white/10"
             style={{ 
               top: watermarkPos.top, 
               left: watermarkPos.left,
@@ -273,47 +420,38 @@ export default function PublicPlayer() {
               textShadow: '2px 2px 10px rgba(0,0,0,0.9)'
             }}
           >
-            {userData.name?.toUpperCase()} | {userData.cnic}
+            {localReg.name?.toUpperCase()} | {localReg.cnic}
           </div>
         )}
 
-        {/* Control Bar */}
+        {/* Control Bar Overlay */}
         <div className="absolute bottom-0 left-0 right-0 p-10 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500 z-[100]">
-          <div className={`relative w-full h-1.5 bg-white/10 rounded-full mb-8 overflow-hidden ${globalSettings.blockForward10 ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+          <div className={`relative w-full h-1.5 bg-white/10 rounded-full mb-8 overflow-hidden ${globalSettings?.blockForward10 ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
             <div 
               className="absolute top-0 left-0 h-full bg-sky-500 shadow-[0_0_20px_rgba(14,165,233,0.8)]"
-              style={{ width: `${(currentTime / duration) * 100}%` }}
+              style={{ width: `${(currentTime / duration) * 100 || 0}%` }}
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-10">
-              {!globalSettings.blockPause && (
-                <button onClick={togglePlay} className="text-white hover:text-sky-400 transition-all transform active:scale-90">
-                  {isPaused ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="m7 3 14 9-14 9V3z"/></svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
-                  )}
-                </button>
-              )}
+              <button onClick={togglePlay} className="text-white hover:text-sky-400 transition-all transform active:scale-90">
+                {isPaused ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="m7 3 14 9-14 9V3z"/></svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
+                )}
+              </button>
               
               <div className="flex items-center gap-3 text-white font-mono text-sm font-bold tracking-widest">
                 <span>{formatTime(currentTime)}</span>
                 <span className="text-white/10">|</span>
                 <span className="text-white/30">{formatTime(duration)}</span>
               </div>
-
-              <div className="flex items-center gap-6">
-                <button onClick={() => { if(videoRef.current) videoRef.current.currentTime -= 10; }} className="text-white/40 hover:text-white font-bold text-[10px] uppercase tracking-tighter transition-colors">Rewind 10s</button>
-                {!globalSettings.blockForward10 && (
-                  <button onClick={() => { if(videoRef.current) videoRef.current.currentTime += 10; }} className="text-white/40 hover:text-white font-bold text-[10px] uppercase tracking-tighter transition-colors">Forward 10s</button>
-                )}
-              </div>
             </div>
 
             <div className="flex items-center gap-10">
-              {!globalSettings.blockSpeed && (
+              {!globalSettings?.blockSpeed && (
                 <div className="flex items-center gap-4">
                   <span className="text-white/20 text-[10px] font-bold uppercase tracking-widest">Playback</span>
                   <div className="flex gap-1">
@@ -333,10 +471,10 @@ export default function PublicPlayer() {
               )}
 
               <button 
-                onClick={() => document.fullscreenElement ? document.exitFullscreen() : playerContainerRef.current?.requestFullscreen()}
+                onClick={() => document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : playerContainerRef.current?.requestFullscreen()}
                 className="text-white/40 hover:text-white transition-colors"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
               </button>
             </div>
           </div>

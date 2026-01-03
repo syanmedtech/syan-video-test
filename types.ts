@@ -1,4 +1,5 @@
 
+
 export type UserRole = 'super_admin' | 'admin';
 
 export interface Admin {
@@ -83,6 +84,12 @@ export interface Video {
   securitySettings: SecuritySettings;
   availabilitySettings: AvailabilitySettings;
   playerSettings: PlayerSettings;
+  // Added publicLink property to fix missing property errors in Instructions.tsx and Player.tsx
+  publicLink?: {
+    token: string;
+    createdAt: number;
+    revoked: boolean;
+  } | null;
 }
 
 export interface PublicUser {
