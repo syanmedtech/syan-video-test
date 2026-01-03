@@ -22,7 +22,8 @@ export default function AdminLogin() {
       if (isLogin) {
         const user = await authService.login(email, password);
         localStorage.setItem('admin_auth', JSON.stringify({ uid: user.uid, email: user.email }));
-        navigate('/admin/dashboard');
+        // Navigating to /admin which is the base dashboard path
+        navigate('/admin');
       } else {
         await authService.signup(email, password);
         setError('Account created. Please sign in.');

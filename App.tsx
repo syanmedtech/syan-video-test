@@ -22,8 +22,8 @@ const ProtectedRoute = ({ children }: { children?: React.ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   
   useEffect(() => {
-    const auth = localStorage.getItem('admin_auth');
-    setIsAuthenticated(!!auth);
+    const authData = localStorage.getItem('admin_auth');
+    setIsAuthenticated(!!authData);
   }, []);
 
   if (isAuthenticated === null) return <div className="flex h-screen items-center justify-center text-gray-500">Loading...</div>;
@@ -49,7 +49,8 @@ const AdminLayout = ({ children }: { children?: React.ReactNode }) => {
     { label: 'Settings', icon: <ICONS.Settings className="w-5 h-5" />, path: '/admin/settings' },
   ];
 
-  const isExactAdmin = location.pathname === '/admin';
+  // Dashboard is active for both /admin and /admin/dashboard
+  const isExactAdmin = location.pathname === '/admin' || location.pathname === '/admin/dashboard';
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -121,7 +122,10 @@ export default function App() {
   return (
     <Routes>
       <Route path="/admin/login" element={<AdminLogin />} />
+      
+      {/* Dashboard Routes */}
       <Route path="/admin" element={<ProtectedRoute><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/dashboard" element={<ProtectedRoute><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
       
       {/* Videos Section */}
       <Route path="/admin/videos" element={<ProtectedRoute><AdminLayout><VideoLibrary /></AdminLayout></ProtectedRoute>} />
@@ -143,6 +147,8 @@ export default function App() {
       <Route path="/watch/:shareId/player" element={<PublicPlayer />} />
 
       <Route path="/" element={<Navigate to="/admin" replace />} />
+      {/* Catch-all for undefined routes in admin */}
+      <Route path="/admin/*" element={<Navigate to="/admin" replace />} />
     </Routes>
   );
 }
