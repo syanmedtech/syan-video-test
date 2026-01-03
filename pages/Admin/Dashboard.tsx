@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { ICONS } from '../../constants';
 import { seedFirestore } from '../../firestoreSeeder';
+import { isFirebaseConfigured } from '../../firebase';
 
 export default function AdminDashboard() {
   const [stats] = useState({
@@ -12,9 +13,10 @@ export default function AdminDashboard() {
   });
 
   useEffect(() => {
-    // Auto-seed Firestore on initial dashboard load for every session.
-    // This handles collection/document creation silently in the background.
-    seedFirestore();
+    // Only attempt to seed if Firebase is configured.
+    if (isFirebaseConfigured()) {
+      seedFirestore();
+    }
   }, []);
 
   const recentLogs = [
@@ -31,7 +33,7 @@ export default function AdminDashboard() {
           <p className="text-slate-500 mt-1">Real-time overview of your secure video infrastructure.</p>
         </div>
         <div className="px-4 py-1.5 bg-slate-100 rounded-full text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] border border-slate-200">
-          Environment: {window.location.hostname === 'localhost' ? 'Local Development' : 'Production'}
+          Environment: {!isFirebaseConfigured() ? 'Demo Mode' : (window.location.hostname === 'localhost' ? 'Local Development' : 'Production')}
         </div>
       </div>
 
@@ -89,8 +91,10 @@ export default function AdminDashboard() {
             </h2>
             <div className="space-y-4">
               <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
-                <span className="text-sm text-slate-400">Database Seeding</span>
-                <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest">Auto-Synced</span>
+                <span className="text-sm text-slate-400">Database Connection</span>
+                <span className={`text-[10px] font-bold uppercase tracking-widest ${isFirebaseConfigured() ? 'text-green-400' : 'text-amber-400'}`}>
+                  {isFirebaseConfigured() ? 'Active' : 'Demo Link'}
+                </span>
               </div>
               <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
                 <span className="text-sm text-slate-400">Stream Protection</span>
@@ -112,7 +116,7 @@ export default function AdminDashboard() {
                 <div className="w-1.5 h-1.5 rounded-full bg-green-500/20" />
               </div>
             </div>
-            <p className="text-lg font-mono text-white/90">SYAN-v4.02-STABLE</p>
+            <p className="text-lg font-mono text-white/90">SYAN-v4.02-{!isFirebaseConfigured() ? 'DEMO' : 'STABLE'}</p>
           </div>
           
           <ICONS.Shield className="absolute -bottom-20 -right-20 w-64 h-64 text-white/5 rotate-12 pointer-events-none" />

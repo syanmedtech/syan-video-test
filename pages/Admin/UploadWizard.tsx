@@ -3,11 +3,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ICONS, BROWSER_OPTIONS } from '../../constants';
 import { VideoSourceType, SourceMeta } from '../../types';
+import { isFirebaseConfigured } from '../../firebase';
 
 // Mock/Concept for Firebase usage in UI
-// In a real project, import these from your firebase/firestore setup
 const subscribeToImportJob = (jobId: string, callback: (job: any) => void) => {
-  // Mocking the subscription to a Firestore document
   const interval = setInterval(() => {
     const job = JSON.parse(localStorage.getItem(`import_job_${jobId}`) || '{}');
     if (job.status === 'done' || job.status === 'error') clearInterval(interval);
@@ -65,6 +64,10 @@ export default function UploadWizard() {
 
   // Google Drive Integration
   const handleConnectDrive = () => {
+    if (!isFirebaseConfigured()) {
+      alert("This action requires Firebase config and works on Vercel deployments.");
+      return;
+    }
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || 'YOUR_CLIENT_ID',
       scope: 'https://www.googleapis.com/auth/drive.readonly',
@@ -99,15 +102,10 @@ export default function UploadWizard() {
   const startDriveImport = async () => {
     if (!selectedDriveFile || !driveToken) return;
     
-    // In a real app, call the Firebase Cloud Function
-    // const startDriveImportFn = httpsCallable(functions, 'startDriveImport');
-    // const result = await startDriveImportFn({ videoId: id || 'new_video', driveFileId: selectedDriveFile.id, driveAccessToken: driveToken });
-    
     // Simulate Function Call and Job Tracking
     const jobId = 'job_' + Math.random().toString(36).substr(2, 9);
     setImportJobId(jobId);
     
-    // Mocking job document updates in localStorage
     let progress = 0;
     const interval = setInterval(() => {
       progress += 10;
@@ -146,6 +144,10 @@ export default function UploadWizard() {
   };
 
   const handleSave = () => {
+    if (!isFirebaseConfigured()) {
+      alert("Action restricted: This action requires Firebase config and works on Vercel deployments.");
+      return;
+    }
     console.log('Saving video...', formData);
     alert('Video settings saved successfully!');
     navigate('/admin/videos');
@@ -182,12 +184,22 @@ export default function UploadWizard() {
           </button>
           <button 
             onClick={handleSave}
-            className="px-6 py-2 rounded-xl bg-sky-600 text-white font-bold hover:bg-sky-700 shadow-lg shadow-sky-500/20"
+            disabled={!isFirebaseConfigured()}
+            className={`px-6 py-2 rounded-xl text-white font-bold shadow-lg transition-all ${
+              isFirebaseConfigured() ? 'bg-sky-600 hover:bg-sky-700 shadow-sky-500/20' : 'bg-slate-400 cursor-not-allowed'
+            }`}
           >
             {id ? 'Update Video' : 'Save & Publish'}
           </button>
         </div>
       </div>
+
+      {!isFirebaseConfigured() && (
+        <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center gap-3 text-amber-800 text-sm">
+           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+           <span className="font-bold">Notice:</span> Saving and uploading is disabled in Demo Mode. Connect Firebase to enable full functionality.
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
         {/* Tabs Header */}
@@ -218,13 +230,16 @@ export default function UploadWizard() {
               </div>
 
               {!id && sourceType === 'direct_upload' && (
-                <div className="p-8 border-2 border-dashed border-slate-200 rounded-2xl text-center hover:border-sky-500 transition-all group cursor-pointer">
+                <div 
+                  onClick={() => !isFirebaseConfigured() && alert("File selection is disabled in Demo Mode.")}
+                  className={`p-8 border-2 border-dashed border-slate-200 rounded-2xl text-center transition-all group ${isFirebaseConfigured() ? 'hover:border-sky-500 cursor-pointer' : 'cursor-not-allowed bg-slate-50 opacity-60'}`}
+                >
                   <div className="inline-flex items-center justify-center w-12 h-12 bg-sky-50 text-sky-600 rounded-full group-hover:bg-sky-100 group-hover:scale-110 transition-all mb-4">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                   </div>
                   <h3 className="font-bold text-slate-900">Choose Video File</h3>
                   <p className="text-sm text-slate-500 mt-1">MP4, MOV or MKV (Max 2GB). Will be automatically encrypted.</p>
-                  <input type="file" className="hidden" />
+                  <input type="file" className="hidden" disabled={!isFirebaseConfigured()} />
                 </div>
               )}
 

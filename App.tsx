@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom';
 import { ICONS } from './constants';
+import { isFirebaseConfigured } from './firebase';
 import AdminLogin from './pages/Admin/Login';
 import AdminDashboard from './pages/Admin/Dashboard';
 import VideoLibrary from './pages/Admin/VideoLibrary';
@@ -94,9 +95,22 @@ const AdminLayout = ({ children }: { children?: React.ReactNode }) => {
         </div>
       </aside>
 
-      <main className="flex-1 ml-64 p-8">
-        <div className="max-w-7xl mx-auto">
-          {children}
+      <main className="flex-1 ml-64 min-h-screen flex flex-col">
+        {!isFirebaseConfigured() && (
+          <div className="bg-amber-50 border-b border-amber-200 px-8 py-2 flex items-center justify-between z-[200] sticky top-0">
+            <div className="flex items-center gap-2 text-amber-800 text-xs font-bold">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              Demo Mode: Firebase not connected. Some features are restricted.
+            </div>
+            <a href="https://vercel.com" target="_blank" rel="noreferrer" className="text-[10px] font-bold text-amber-600 hover:underline uppercase tracking-widest">
+              Deploy to Vercel for full access
+            </a>
+          </div>
+        )}
+        <div className="p-8 flex-1">
+          <div className="max-w-7xl mx-auto">
+            {children}
+          </div>
         </div>
       </main>
     </div>

@@ -2,13 +2,14 @@
 import React, { useState, useEffect } from 'react';
 import { ICONS } from '../../constants';
 import { GlobalPlayerSettings } from '../../types';
+import { isFirebaseConfigured } from '../../firebase';
 
 export default function PlayerSettingsPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [settings, setSettings] = useState<GlobalPlayerSettings>({
-    watermarkStoragePath: null,
+    watermarkAssetPath: null,
     watermarkOpacity: 0.25,
-    logoStoragePath: null,
+    logoAssetPath: null,
     logoOpacity: 0.6,
     securityWatermarkEnabled: true,
     blinkDurationMs: 2000,
@@ -50,6 +51,10 @@ export default function PlayerSettingsPage() {
   }, []);
 
   const handleSave = async () => {
+    if (!isFirebaseConfigured()) {
+      alert("This action requires Firebase config and works on Vercel deployments.");
+      return;
+    }
     setIsLoading(true);
     // Simulation: Write to Firestore doc appConfig/player
     setTimeout(() => {
@@ -63,6 +68,10 @@ export default function PlayerSettingsPage() {
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'watermark' | 'logo') => {
+    if (!isFirebaseConfigured()) {
+      alert("File upload is disabled in Demo Mode.");
+      return;
+    }
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -73,14 +82,14 @@ export default function PlayerSettingsPage() {
         
         if (type === 'watermark') {
           setWatermarkPreview(result);
-          // Store uploaded watermark image in: /globalPlayerAssets/watermarks/{uuid}.png
+          // Store uploaded watermark image path
           setSettings({ 
             ...settings, 
             watermarkAssetPath: `/globalPlayerAssets/watermarks/${uuid}.${extension}` 
           });
         } else {
           setLogoPreview(result);
-          // Store uploaded logo image in: /globalPlayerAssets/logos/{uuid}.png
+          // Store uploaded logo image path
           setSettings({ 
             ...settings, 
             logoAssetPath: `/globalPlayerAssets/logos/${uuid}.${extension}` 
@@ -100,13 +109,22 @@ export default function PlayerSettingsPage() {
         </div>
         <button
           onClick={handleSave}
-          disabled={isLoading}
-          className="px-8 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 shadow-xl transition-all flex items-center gap-3 disabled:opacity-50 active:scale-95"
+          disabled={isLoading || !isFirebaseConfigured()}
+          className={`px-8 py-3 rounded-2xl font-bold shadow-xl transition-all flex items-center gap-3 active:scale-95 disabled:opacity-50 ${
+            isFirebaseConfigured() ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-slate-400 text-white cursor-not-allowed'
+          }`}
         >
           {isLoading && <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
           Save Changes
         </button>
       </div>
+
+      {!isFirebaseConfigured() && (
+        <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center gap-3 text-amber-800 text-sm">
+           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+           <span className="font-bold">Demo Mode:</span> Configuration changes cannot be persisted to Firestore without environment variables.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <div className="space-y-8">
@@ -130,7 +148,9 @@ export default function PlayerSettingsPage() {
                 </div>
                 <div className="flex-1 space-y-3">
                   <input type="file" accept="image/*" className="hidden" id="watermark-up" onChange={(e) => handleFileUpload(e, 'watermark')} />
-                  <label htmlFor="watermark-up" className="inline-block px-4 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer transition-all">
+                  <label htmlFor="watermark-up" className={`inline-block px-4 py-2 border rounded-xl text-xs font-bold transition-all ${
+                    isFirebaseConfigured() ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer' : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}>
                     Choose Image
                   </label>
                   <div className="space-y-1">
@@ -162,7 +182,9 @@ export default function PlayerSettingsPage() {
                 </div>
                 <div className="flex-1 space-y-3">
                   <input type="file" accept="image/*" className="hidden" id="logo-up" onChange={(e) => handleFileUpload(e, 'logo')} />
-                  <label htmlFor="logo-up" className="inline-block px-4 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer transition-all">
+                  <label htmlFor="logo-up" className={`inline-block px-4 py-2 border rounded-xl text-xs font-bold transition-all ${
+                    isFirebaseConfigured() ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer' : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}>
                     Choose Logo
                   </label>
                   <div className="space-y-1">

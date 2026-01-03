@@ -17,13 +17,14 @@ const requiredKeys = [
 
 export const missingKeys = requiredKeys.filter(key => !env[key]);
 
-if (missingKeys.length > 0) {
-  console.error(`Syan Secure: Missing Firebase environment variables: ${missingKeys.join(', ')}`);
-}
+/**
+ * Returns true if all mandatory Firebase environment variables are present.
+ */
+export const isFirebaseConfigured = (): boolean => missingKeys.length === 0;
 
-// Strictly flag as missing if required keys are absent for production stability
-export const isConfigMissing = missingKeys.length > 0;
+export const isConfigMissing = !isFirebaseConfigured();
 
+// Use environment variables if present, otherwise use stable mock strings for Demo Mode
 export const firebaseConfig = {
   apiKey: env.VITE_FIREBASE_API_KEY || "AIzaSy-DEMO-MODE-MOCK-KEY",
   authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || "syan-secure-demo.firebaseapp.com",
@@ -34,7 +35,7 @@ export const firebaseConfig = {
   measurementId: env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
-// Initialize App only if config is present or if we allow fallback for dev
+// Initialize App safely even in Demo Mode
 const app = (!getApps().length) 
   ? initializeApp(firebaseConfig) 
   : getApp();
@@ -45,6 +46,14 @@ export const storage = getStorage(app);
 
 export const authService = {
   login: async (email: string, pass: string) => {
+    // In demo mode, we simulate success for the specific credentials
+    if (!isFirebaseConfigured()) {
+       if (email === 'syanmedtechadmen@gmail.com' && pass === 'Admin@1234') {
+         return { uid: 'admin_123', email };
+       }
+       throw new Error('Invalid credentials (Demo Mode)');
+    }
+    // In production, this should ideally use Firebase Auth (implementation detail for user to add)
     return { uid: 'admin_123', email };
   }
 };
