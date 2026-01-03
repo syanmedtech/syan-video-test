@@ -38,6 +38,15 @@ export default function PublicPlayer() {
 
   const localReg = JSON.parse(localStorage.getItem(`session_${shareId}`) || '{}');
 
+  // Prevent page scrolling during player view
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, []);
+
   // Load Data
   useEffect(() => {
     const init = async () => {
@@ -356,36 +365,36 @@ export default function PublicPlayer() {
   return (
     <div 
       ref={playerContainerRef}
-      className="fixed inset-0 bg-black flex flex-col no-select overflow-hidden cursor-none hover:cursor-default"
+      className="fixed inset-0 w-full h-[100vh] h-[100dvh] bg-black flex flex-col no-select overflow-hidden cursor-none hover:cursor-default"
       style={{ filter: `brightness(${brightness}%)` }}
       onContextMenu={(e) => { e.preventDefault(); logViolation(ViolationType.RIGHT_CLICK); }}
     >
-      {/* Dynamic Header Overlay */}
-      <div className="absolute top-0 left-0 right-0 p-10 flex justify-between items-start z-[100] bg-gradient-to-b from-black/90 to-transparent">
-        <div className="flex items-center gap-6">
+      {/* Dynamic Header Overlay - flex: none ensures it doesn't shrink and pushes content down correctly */}
+      <header className="flex-none p-4 md:p-10 flex justify-between items-start z-[100] bg-gradient-to-b from-black/90 to-transparent">
+        <div className="flex items-center gap-4 md:gap-6">
           <button 
             onClick={() => {
               if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
               navigate(`/watch/${shareId}/instructions`);
             }}
-            className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-all border border-white/5 text-white"
+            className="p-2 md:p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-all border border-white/5 text-white"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
           </button>
           <div>
-            <h1 className="text-white font-bold text-lg tracking-tight truncate max-w-md">{videoData?.title}</h1>
-            <p className="text-white/40 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Syan Secured Stream</p>
+            <h1 className="text-white font-bold text-sm md:text-lg tracking-tight truncate max-w-[150px] md:max-w-md">{videoData?.title}</h1>
+            <p className="text-white/40 text-[8px] md:text-[10px] font-bold tracking-[0.2em] md:tracking-[0.3em] uppercase mt-0.5 md:mt-1">Syan Secured Stream</p>
           </div>
         </div>
-        <div className={`px-5 py-2 rounded-2xl text-[10px] font-bold uppercase tracking-widest border transition-all ${
+        <div className={`px-3 py-1 md:px-5 md:py-2 rounded-xl md:rounded-2xl text-[8px] md:text-[10px] font-bold uppercase tracking-widest border transition-all ${
           violations > 0 ? 'bg-red-500/20 border-red-500/40 text-red-500 animate-pulse' : 'bg-green-500/10 border-green-500/20 text-green-400'
         }`}>
           Compliance: {violations} / {videoData?.securitySettings?.violationLimit || 4}
         </div>
-      </div>
+      </header>
 
-      {/* Main Video Viewport */}
-      <div className="flex-1 relative flex items-center justify-center group">
+      {/* Main Video Viewport - flex-1 with min-h-0 makes it fill the remaining space correctly */}
+      <div className="flex-1 min-h-0 relative flex items-center justify-center group bg-black">
         {videoUrl && (
           <video
             ref={videoRef}
@@ -393,7 +402,7 @@ export default function PublicPlayer() {
             onPause={handlePauseEvent}
             onPlay={() => setIsPaused(false)}
             onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
-            className="w-full h-full object-contain"
+            className="w-full h-full max-w-full max-h-full object-contain pointer-events-auto"
             playsInline
             src={videoUrl} 
           />
@@ -402,17 +411,17 @@ export default function PublicPlayer() {
         {/* Branding Overlays */}
         {globalSettings?.watermarkAssetPath && (
           <div 
-            className="absolute inset-0 pointer-events-none flex items-center justify-center z-30 select-none no-select"
+            className="absolute inset-0 pointer-events-none flex items-center justify-center z-30 select-none no-select overflow-hidden"
             style={{ opacity: globalSettings.watermarkOpacity }}
           >
-             <div className="w-1/2 opacity-30 pointer-events-none text-white font-bold text-6xl text-center rotate-45 border-4 border-white p-12 select-none">SYAN SECURE</div>
+             <div className="w-3/4 md:w-1/2 opacity-30 pointer-events-none text-white font-bold text-4xl md:text-6xl text-center rotate-45 border-4 border-white p-8 md:p-12 select-none">SYAN SECURE</div>
           </div>
         )}
 
         {/* Security Personalization Blinking Watermark */}
         {showSecurityWatermark && (
           <div 
-            className="absolute z-50 text-white/40 pointer-events-none transition-all duration-300 font-bold text-xs tracking-[0.2em] backdrop-blur-[2px] px-4 py-2 bg-black/40 rounded-xl border border-white/10"
+            className="absolute z-50 text-white/40 pointer-events-none transition-all duration-300 font-bold text-[8px] md:text-xs tracking-[0.2em] backdrop-blur-[2px] px-2 py-1 md:px-4 md:py-2 bg-black/40 rounded-lg md:rounded-xl border border-white/10"
             style={{ 
               top: watermarkPos.top, 
               left: watermarkPos.left,
@@ -424,9 +433,9 @@ export default function PublicPlayer() {
           </div>
         )}
 
-        {/* Control Bar Overlay */}
-        <div className="absolute bottom-0 left-0 right-0 p-10 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500 z-[100]">
-          <div className={`relative w-full h-1.5 bg-white/10 rounded-full mb-8 overflow-hidden ${globalSettings?.blockForward10 ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+        {/* Control Bar Overlay - remains absolute but stays within the player container */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 md:p-10 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500 z-[100]">
+          <div className={`relative w-full h-1 md:h-1.5 bg-white/10 rounded-full mb-4 md:mb-8 overflow-hidden ${globalSettings?.blockForward10 ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
             <div 
               className="absolute top-0 left-0 h-full bg-sky-500 shadow-[0_0_20px_rgba(14,165,233,0.8)]"
               style={{ width: `${(currentTime / duration) * 100 || 0}%` }}
@@ -434,32 +443,32 @@ export default function PublicPlayer() {
           </div>
 
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-10">
+            <div className="flex items-center gap-4 md:gap-10">
               <button onClick={togglePlay} className="text-white hover:text-sky-400 transition-all transform active:scale-90">
                 {isPaused ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="m7 3 14 9-14 9V3z"/></svg>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" className="md:w-[38px] md:h-[38px]"><path d="m7 3 14 9-14 9V3z"/></svg>
                 ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" className="md:w-[38px] md:h-[38px]"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
                 )}
               </button>
               
-              <div className="flex items-center gap-3 text-white font-mono text-sm font-bold tracking-widest">
+              <div className="flex items-center gap-2 md:gap-3 text-white font-mono text-[10px] md:text-sm font-bold tracking-widest">
                 <span>{formatTime(currentTime)}</span>
                 <span className="text-white/10">|</span>
                 <span className="text-white/30">{formatTime(duration)}</span>
               </div>
             </div>
 
-            <div className="flex items-center gap-10">
+            <div className="flex items-center gap-4 md:gap-10">
               {!globalSettings?.blockSpeed && (
-                <div className="flex items-center gap-4">
-                  <span className="text-white/20 text-[10px] font-bold uppercase tracking-widest">Playback</span>
+                <div className="hidden sm:flex items-center gap-4">
+                  <span className="text-white/20 text-[8px] md:text-[10px] font-bold uppercase tracking-widest">Speed</span>
                   <div className="flex gap-1">
                     {[1, 1.25, 1.5, 2].map(s => (
                       <button 
                         key={s}
                         onClick={() => { setPlaybackSpeed(s); if(videoRef.current) videoRef.current.playbackRate = s; }}
-                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                        className={`px-2 py-1 md:px-3 md:py-1.5 rounded-lg text-[8px] md:text-[10px] font-bold transition-all border ${
                           playbackSpeed === s ? 'bg-white text-black border-white' : 'bg-transparent text-white/40 border-white/5 hover:border-white/20'
                         }`}
                       >
@@ -472,9 +481,9 @@ export default function PublicPlayer() {
 
               <button 
                 onClick={() => document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : playerContainerRef.current?.requestFullscreen()}
-                className="text-white/40 hover:text-white transition-colors"
+                className="text-white/40 hover:text-white transition-colors p-1"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="md:w-[24px] md:h-[24px]"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
               </button>
             </div>
           </div>
