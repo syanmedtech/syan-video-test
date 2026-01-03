@@ -16,7 +16,9 @@
     "axios": "^1.13.2",
     "firebase-admin": "^13.6.0",
     "firebase-functions": "^7.0.2",
-    "firebase": "^12.7.0"
+    "firebase": "^12.7.0",
+    "@vitejs/plugin-react": "^5.1.2",
+    "vite": "^7.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
