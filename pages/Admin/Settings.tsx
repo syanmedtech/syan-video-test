@@ -1,12 +1,69 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { ICONS } from '../../constants';
+import { db, auth, isFirebaseConfigured } from '../../firebase';
+import { Admin } from '../../types';
 
 export default function AdminSettings() {
-  const [admins] = useState([
-    { uid: '1', email: 'syanmedtechadmen@gmail.com', role: 'super_admin', date: '2024-01-01' },
-    { uid: '2', email: 'support@syan.com', role: 'admin', date: '2024-03-15' },
-  ]);
+  const [admins, setAdmins] = useState<Admin[]>([]);
+  const [currentUserRole, setCurrentUserRole] = useState<string>('');
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminUid, setNewAdminUid] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured()) return;
+
+    // Determine current user role
+    const fetchRole = async () => {
+      if (auth.currentUser) {
+        const snap = await getDoc(doc(db, 'admins', auth.currentUser.uid));
+        if (snap.exists()) setCurrentUserRole(snap.data().role);
+      }
+    };
+    fetchRole();
+
+    const unsub = onSnapshot(collection(db, 'admins'), (snap) => {
+      setAdmins(snap.docs.map(doc => ({ uid: doc.id, ...doc.data() } as Admin)));
+    });
+
+    return unsub;
+  }, []);
+
+  const handleAddAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (currentUserRole !== 'super_admin') {
+      alert("Only super admins can add new admins.");
+      return;
+    }
+    if (!newAdminEmail || !newAdminUid) return;
+
+    try {
+      await setDoc(doc(db, 'admins', newAdminUid), {
+        uid: newAdminUid,
+        email: newAdminEmail,
+        role: 'admin',
+        createdAt: Date.now()
+      });
+      setNewAdminEmail('');
+      setNewAdminUid('');
+      setIsAdding(false);
+      alert('Admin added successfully.');
+    } catch (err) {
+      alert('Error adding admin: ' + (err as Error).message);
+    }
+  };
+
+  const handleRevoke = async (uid: string, role: string) => {
+    if (role === 'super_admin') {
+      alert("Cannot revoke super admin access.");
+      return;
+    }
+    if (window.confirm("Revoke admin access? The user will still be able to sign in as a public user but lose dashboard access.")) {
+      await deleteDoc(doc(db, 'admins', uid));
+    }
+  };
 
   return (
     <div className="max-w-4xl space-y-12">
@@ -15,34 +72,6 @@ export default function AdminSettings() {
         <p className="text-slate-500">Manage your administrative team and account security.</p>
       </div>
 
-      {/* Account Section */}
-      <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-8 space-y-6">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-sky-100 rounded-2xl flex items-center justify-center text-sky-600">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Security Credentials</h2>
-              <p className="text-sm text-slate-500">Update your login password regularly.</p>
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Current Password</label>
-              <input type="password" placeholder="••••••••" className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-sky-500 outline-none" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">New Password</label>
-              <input type="password" placeholder="••••••••" className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-sky-500 outline-none" />
-            </div>
-          </div>
-          <button className="px-6 py-2.5 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-colors">Update Password</button>
-        </div>
-      </section>
-
-      {/* Admin Management Section */}
       <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-8 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -51,14 +80,41 @@ export default function AdminSettings() {
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-900">Team Management</h2>
-              <p className="text-sm text-slate-500">Invite and manage other administrators.</p>
+              <p className="text-sm text-slate-500">Only Super Admins can manage this list.</p>
             </div>
           </div>
-          <button className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white rounded-xl text-sm font-bold hover:bg-sky-700">
-            <ICONS.Plus className="w-4 h-4" />
-            Add Admin
-          </button>
+          {currentUserRole === 'super_admin' && (
+            <button onClick={() => setIsAdding(!isAdding)} className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white rounded-xl text-sm font-bold hover:bg-sky-700 transition-all">
+              <ICONS.Plus className="w-4 h-4" />
+              {isAdding ? 'Close' : 'Add Admin'}
+            </button>
+          )}
         </div>
+
+        {isAdding && (
+          <form onSubmit={handleAddAdmin} className="p-8 bg-slate-50 border-b border-slate-100 grid md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+               <label className="text-[10px] font-bold text-slate-400 uppercase">User UID</label>
+               <input 
+                type="text" value={newAdminUid} onChange={e => setNewAdminUid(e.target.value)} 
+                placeholder="Paste UID from Firebase/Users" required 
+                className="w-full px-4 py-2 border rounded-lg text-sm" 
+               />
+            </div>
+            <div className="space-y-1">
+               <label className="text-[10px] font-bold text-slate-400 uppercase">Email</label>
+               <input 
+                type="email" value={newAdminEmail} onChange={e => setNewAdminEmail(e.target.value)} 
+                placeholder="admin@example.com" required 
+                className="w-full px-4 py-2 border rounded-lg text-sm" 
+               />
+            </div>
+            <div className="md:col-span-2">
+              <button type="submit" className="w-full bg-slate-900 text-white py-2 rounded-lg font-bold text-sm">Create Admin Document</button>
+            </div>
+          </form>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-slate-50">
@@ -73,7 +129,7 @@ export default function AdminSettings() {
                 <tr key={admin.uid} className="hover:bg-slate-50 transition-colors">
                   <td className="px-8 py-4">
                     <div className="font-bold text-slate-900">{admin.email}</div>
-                    <div className="text-[10px] text-slate-400">Added on {admin.date}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">UID: {admin.uid}</div>
                   </td>
                   <td className="px-8 py-4">
                     <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
@@ -83,8 +139,8 @@ export default function AdminSettings() {
                     </span>
                   </td>
                   <td className="px-8 py-4 text-right">
-                    {admin.role !== 'super_admin' && (
-                      <button className="text-red-600 font-bold text-sm hover:underline">Revoke Access</button>
+                    {admin.role !== 'super_admin' && currentUserRole === 'super_admin' && (
+                      <button onClick={() => handleRevoke(admin.uid, admin.role)} className="text-red-600 font-bold text-sm hover:underline">Revoke Access</button>
                     )}
                   </td>
                 </tr>
